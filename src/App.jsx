@@ -30,7 +30,7 @@ function App() {
     if (task) {
       task.completed = updated.completed;
     }
-    setTasks(tasks);
+    setTasks((prev) => prev.map((t) => (t.id === id ? updated : t)));
   }
 
   async function handleDelete(id) {
