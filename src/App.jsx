@@ -4,10 +4,11 @@ import TaskForm from './components/TaskForm.jsx';
 import TaskList from './components/TaskList.jsx';
 import FilterBar from './components/FilterBar.jsx';
 import SearchBox from './components/SearchBox.jsx';
+import { useUrlFilter } from './useUrlFilter.js';
 
 function App() {
   const [tasks, setTasks] = useState([]);
-  const [filter, setFilter] = useState('all');
+  const [filter, setFilter] = useUrlFilter();
   const [query, setQuery] = useState('');
   const [loading, setLoading] = useState(true);
 

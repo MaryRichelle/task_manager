@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import App from '../src/App.jsx';
@@ -31,6 +31,12 @@ async function finishInitialLoad() {
     await vi.advanceTimersByTimeAsync(400);
   });
 }
+
+// jsdom keeps one window.location for the whole file, so a test that pushes
+// ?filter=... would otherwise leak into every test after it.
+beforeEach(() => {
+  window.history.replaceState({}, '', '/');
+});
 
 afterEach(() => {
   vi.useRealTimers();
@@ -126,5 +132,106 @@ describe('Task Manager', () => {
     expect(screen.getByText('Latest result')).toBeInTheDocument();
     expect(screen.queryByText('Stale completed result')).not.toBeInTheDocument();
     expect(screen.queryByText('Stale initial result')).not.toBeInTheDocument();
+  });
+});
+
+describe('URL-synced filter', () => {
+  it('restores the filter from the URL on first render', async () => {
+    vi.useFakeTimers();
+    window.history.replaceState({}, '', '/?filter=active');
+    fetchTasks.mockResolvedValue([]);
+
+    render(<App />);
+    await finishInitialLoad();
+
+    // The very first request must already use the URL's filter — not fetch
+    // "all" and then correct itself, which would flash the wrong list.
+    expect(fetchTasks).toHaveBeenCalledTimes(1);
+    expect(fetchTasks.mock.calls[0][0]).toMatchObject({ filter: 'active' });
+    expect(screen.getByRole('button', { name: 'active' })).toBeDisabled();
+  });
+
+  it('falls back to "all" when the URL carries an unknown filter', async () => {
+    vi.useFakeTimers();
+    window.history.replaceState({}, '', '/?filter=nonsense');
+    fetchTasks.mockResolvedValue([]);
+
+    render(<App />);
+    await finishInitialLoad();
+
+    expect(fetchTasks.mock.calls[0][0]).toMatchObject({ filter: 'all' });
+    expect(screen.getByRole('button', { name: 'all' })).toBeDisabled();
+  });
+
+  it('writes the filter to the URL when one is picked', async () => {
+    vi.useFakeTimers();
+    fetchTasks.mockResolvedValue([]);
+
+    render(<App />);
+    await finishInitialLoad();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'completed' }));
+    });
+
+    expect(window.location.search).toBe('?filter=completed');
+  });
+
+  it('drops the param again when returning to "all"', async () => {
+    vi.useFakeTimers();
+    window.history.replaceState({}, '', '/?filter=completed');
+    fetchTasks.mockResolvedValue([]);
+
+    render(<App />);
+    await finishInitialLoad();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'all' }));
+    });
+
+    // "all" is the default, so a bare URL is the honest representation.
+    expect(window.location.search).toBe('');
+  });
+
+  it('preserves unrelated query params', async () => {
+    vi.useFakeTimers();
+    window.history.replaceState({}, '', '/?ref=email');
+    fetchTasks.mockResolvedValue([]);
+
+    render(<App />);
+    await finishInitialLoad();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'active' }));
+    });
+
+    expect(window.location.search).toContain('ref=email');
+    expect(window.location.search).toContain('filter=active');
+  });
+
+  it('follows the browser Back button', async () => {
+    vi.useFakeTimers();
+    fetchTasks.mockResolvedValue([]);
+
+    render(<App />);
+    await finishInitialLoad();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'completed' }));
+    });
+    expect(screen.getByRole('button', { name: 'completed' })).toBeDisabled();
+
+    fetchTasks.mockClear();
+
+    // Back: the URL changes and popstate fires, but React is not re-rendered
+    // by the browser — the listener is what keeps state in step.
+    await act(async () => {
+      window.history.replaceState({}, '', '/');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      await vi.advanceTimersByTimeAsync(400);
+    });
+
+    expect(screen.getByRole('button', { name: 'all' })).toBeDisabled();
+    expect(fetchTasks.mock.calls[0][0]).toMatchObject({ filter: 'all' });
   });
 });

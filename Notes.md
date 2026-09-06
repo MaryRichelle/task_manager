@@ -44,9 +44,61 @@ a different filter, especially when the network responses finish out of order.
 
 **Fix applied:** `App` now uses an `isCurrent` flag inside the fetch effect. The
 cleanup function marks the previous effect as inactive, and a response updates
-state only when its effect is still current. The cleanup also clears the delay
-timer. This correctly prevents stale responses from changing the UI.
+state only when its effect is still current. This correctly prevents stale
+responses from changing the UI.
 
 `App` now fetches immediately for filter changes, while `SearchBox` owns the
 300ms search debounce. This avoids duplicate delays and makes the loading state
 change immediately when the filter changes.
+
+---
+
+## Part 2 — Features
+
+### 1. URL-synced filter
+
+The filter only lived in `useState`, so refreshing the page dropped you back to
+"all", and sending someone a link never showed them what you were actually
+looking at.
+
+I moved it into a `useUrlFilter` hook (`src/useUrlFilter.js`). It returns
+`[filter, setFilter]` the same way `useState` does, so `App` only needed one
+line changed.
+
+Three things have to happen for this to work properly:
+
+- read `?filter=` on the first render, using a lazy initialiser, so the first
+  request already has the right filter. Otherwise the "all" list shows for a
+  moment before it corrects itself.
+- update the URL when the filter changes
+- listen for `popstate`, because Back changes the URL without re-rendering React
+
+The last one is the easy one to miss. Without it you press Back and the address
+bar says `?filter=completed` while the screen is still showing everything.
+
+A few decisions I made along the way:
+
+I used the History API instead of React Router. It's one query param, and the
+hook came out at about 45 lines, which seemed better than pulling in a router
+for that.
+
+`pushState` rather than `replaceState`, so Back steps through the filters you
+clicked. There's a check that skips the push when the URL is already correct,
+otherwise the first render adds a duplicate entry and you have to press Back
+twice to get off the page.
+
+Going back to "all" removes the param instead of writing `?filter=all`, and
+anything unknown in the URL falls back to "all", since people can type whatever
+they want in the address bar.
+
+`FILTERS` moved into the hook and `FilterBar` imports it now, so the list isn't
+written out in two places.
+
+Six tests cover this: loading from the URL, the fallback for a bad value,
+writing the param, clearing it again on "all", leaving unrelated params alone,
+and Back.
+
+### Still to do
+
+Optimistic toggle, and the loading/error states with retry. The debounce Part 2
+asks for is already covered by bug 3 above, and the in-flight guard by bug 4.

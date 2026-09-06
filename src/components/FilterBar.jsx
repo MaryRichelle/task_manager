@@ -1,6 +1,5 @@
 import React from 'react';
-
-const FILTERS = ['all', 'active', 'completed'];
+import { FILTERS } from '../useUrlFilter.js';
 
 function FilterBar({ filter, onChange }) {
   return (
