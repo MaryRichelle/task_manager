@@ -97,8 +97,3 @@ written out in two places.
 Six tests cover this: loading from the URL, the fallback for a bad value,
 writing the param, clearing it again on "all", leaving unrelated params alone,
 and Back.
-
-### Still to do
-
-Optimistic toggle, and the loading/error states with retry. The debounce Part 2
-asks for is already covered by bug 3 above, and the in-flight guard by bug 4.
