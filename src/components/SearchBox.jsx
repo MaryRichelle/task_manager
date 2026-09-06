@@ -4,9 +4,13 @@ function SearchBox({ onSearch }) {
   const [value, setValue] = useState('');
 
   useEffect(() => {
-    setTimeout(() => {
+    const timer = setTimeout(() => {
       onSearch(value);
     }, 300);
+
+    return () => {
+      clearTimeout(timer);
+    };
   }, [value, onSearch]);
 
   return (

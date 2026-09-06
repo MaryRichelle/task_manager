@@ -20,3 +20,33 @@ for a different task. Checkbox state, input focus, or other row state may then
 appear to move to the wrong task.
 
 **Fix:** Use the task's stable identifier: `key={task.id}`.
+
+## 3. Search timers are not cancelled
+
+**What was wrong:** `SearchBox` starts a new `setTimeout` for every keystroke but
+does not clear the previous timer.
+
+**Why it matters:** Typing quickly triggers multiple searches, including searches
+for outdated text. This creates unnecessary requests and can display stale
+results.
+
+**Fix:** Return a cleanup function from the effect that calls
+`clearTimeout`, so only the latest paused query is submitted.
+
+## 4. Filter and search requests can become stale
+
+**What was wrong:** Each filter or query change could start a new request, but
+an older request could finish after the latest request and overwrite the screen
+with results for an old filter or query.
+
+**Why it matters:** A user could select one filter and see results belonging to
+a different filter, especially when the network responses finish out of order.
+
+**Fix applied:** `App` now uses an `isCurrent` flag inside the fetch effect. The
+cleanup function marks the previous effect as inactive, and a response updates
+state only when its effect is still current. The cleanup also clears the delay
+timer. This correctly prevents stale responses from changing the UI.
+
+`App` now fetches immediately for filter changes, while `SearchBox` owns the
+300ms search debounce. This avoids duplicate delays and makes the loading state
+change immediately when the filter changes.

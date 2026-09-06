@@ -12,11 +12,26 @@ function App() {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let isCurrent = true;
     setLoading(true);
-    fetchTasks({ filter, query }).then((result) => {
-      setTasks(result);
-      setLoading(false);
-    });
+
+    fetchTasks({ filter, query })
+      .then((result) => {
+        if (isCurrent) {
+          setTasks(result);
+          setLoading(false);
+        }
+      })
+      .catch((error) => {
+        if (isCurrent) {
+          console.error('Error fetching tasks:', error);
+          setLoading(false);
+        }
+      });
+
+    return () => {
+      isCurrent = false;
+    };
   }, [filter, query]);
 
   async function handleAdd(title) {
@@ -26,10 +41,6 @@ function App() {
 
   async function handleToggle(id) {
     const updated = await toggleTask(id);
-    const task = tasks.find((t) => t.id === id);
-    if (task) {
-      task.completed = updated.completed;
-    }
     setTasks((prev) => prev.map((t) => (t.id === id ? updated : t)));
   }
 
