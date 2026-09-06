@@ -97,3 +97,71 @@ written out in two places.
 Six tests cover this: loading from the URL, the fallback for a bad value,
 writing the param, clearing it again on "all", leaving unrelated params alone,
 and Back.
+
+### 2. Optimistic toggle
+
+`handleToggle` used to await the request before touching state, and `api.js`
+uses a random delay between 150 and 550ms, so the checkbox just sat there after
+you clicked it. Long enough that you assume it's broken and click again.
+
+Now the flip happens first and the request goes out afterwards. If it fails the
+task goes back to how it was and an error appears.
+
+Rolling back was the fiddly part. My first instinct was to snapshot `tasks` and
+restore it on failure, but that's wrong here: the fetch effect can replace the
+whole array while the request is in flight, and restoring the snapshot would
+throw away whatever came back. So the rollback works on a single task by id
+inside a functional update, which also does nothing harmful if the task has been
+deleted or filtered away in the meantime.
+
+I don't use the object the server sends back. It only ever flips `completed`, so
+it always agrees with what's already on screen, and ignoring it avoids an older
+response landing after a newer one. It also dodges a rough edge in `api.js`:
+`toggleTask` with an id that doesn't exist resolves with `{}`, because
+`{...undefined}` is an empty object, and the old code put that straight into the
+list as a row with no id or title.
+
+A second click on a task that's still waiting is ignored, tracked with a set of
+pending ids. Otherwise two requests race and the server flips twice.
+
+Completing a task while you're on the "active" filter takes the row out of the
+list straight away, since it doesn't belong there any more. That needed a
+`matchesFilter` helper which repeats the filtering rule from `api.js`.
+Duplicating it isn't lovely, but an optimistic update has to work the answer out
+locally rather than asking the server. If the request then fails, the row goes
+back at the index it came from rather than being appended to the end.
+
+The toggle error and the loading error below are separate pieces of state on
+purpose, so they can't fight over the same spot on screen.
+
+### 3. Debounced search
+
+Already handled in Part 1. Bug 3 covers waiting for a pause in typing, and bug 4
+covers not letting an older response overwrite a newer one, so there was nothing
+left to add here.
+
+### 4. Loading and error states with retry
+
+A failed fetch used to `console.error` and clear the loading flag, which left you
+looking at "No tasks found." That's the same screen you get when you genuinely
+have no tasks, so there was no way to tell a broken request from an empty list,
+and nothing you could do about it either way.
+
+There's a `loadError` now, and the render has three branches instead of a
+loading/not-loading ternary: loading, error with a Retry button, then the list.
+The old two-way ternary had nowhere to put a third state, which is why a failure
+fell through to the empty list in the first place.
+
+Retry is a `reloadKey` counter sitting in the effect's dependency array. Clicking
+it bumps the number and the effect runs again. Because `filter` and `query` are
+still in that same array, you retry the request you were actually making instead
+of a blank one.
+
+The error clears at the start of every fetch, otherwise a failure followed by a
+filter change leaves a stale message next to fresh results. The `isCurrent` guard
+covers this path too, so a failure from a request you've already moved on from
+can't put an error on screen.
+
+Worth flagging: `fetchTasks` in `api.js` never rejects, so this can't be
+triggered by using the app. To see it by hand you'd have to make `fetchTasks`
+throw temporarily. I left `api.js` alone since it stands in for a real backend.
