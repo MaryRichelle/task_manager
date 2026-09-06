@@ -8,8 +8,8 @@ function TaskList({ tasks, onToggle, onDelete }) {
 
   return (
     <ul className="task-list">
-      {tasks.map((task, index) => (
-        <TaskItem key={index} task={task} onToggle={onToggle} onDelete={onDelete} />
+      {tasks.map((task) => (
+        <TaskItem key={task.id} task={task} onToggle={onToggle} onDelete={onDelete} />
       ))}
     </ul>
   );
