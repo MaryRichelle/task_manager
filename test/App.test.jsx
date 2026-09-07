@@ -1,17 +1,237 @@
-import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import '@testing-library/jest-dom/vitest';
 import App from '../src/App.jsx';
+
+vi.mock('../src/api', () => ({
+  fetchTasks: vi.fn(),
+  createTask: vi.fn(),
+  toggleTask: vi.fn(),
+  deleteTask: vi.fn(),
+}));
+
+import { deleteTask, fetchTasks, toggleTask } from '../src/api';
+
+const seededTasks = [
+  { id: 1, title: 'Read the task description carefully', completed: true },
+  { id: 2, title: 'Find the bugs in Part 1', completed: false },
+  { id: 3, title: 'Build the features in Part 2', completed: false },
+];
+
+function deferred() {
+  let resolve;
+  const promise = new Promise((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
+
+async function finishInitialLoad() {
+  await act(async () => {
+    await vi.advanceTimersByTimeAsync(400);
+  });
+}
+
+// jsdom keeps one window.location for the whole file, so a test that pushes
+// ?filter=... would otherwise leak into every test after it.
+beforeEach(() => {
+  window.history.replaceState({}, '', '/');
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.clearAllMocks();
+});
 
 describe('Task Manager', () => {
   it('renders the heading', () => {
+    fetchTasks.mockResolvedValue([]);
     render(<App />);
     expect(screen.getByText('Task Manager')).toBeInTheDocument();
   });
 
-  // TODO (candidate): add tests covering:
-  // - the task list eventually shows the seeded tasks after loading
-  // - toggling a task's checkbox actually re-renders it as completed
-  // - deleting a task removes it from the list, keyed correctly (not by stray index bugs)
-  // - rapidly switching filters/search doesn't leave the UI showing stale/out-of-order results
-  // - any Part 2 features you implement (URL-synced filter, optimistic toggle, proper debounce, retry-on-error)
+  it('shows the seeded tasks once loading finishes', async () => {
+    vi.useFakeTimers();
+    fetchTasks.mockResolvedValue(seededTasks);
+
+    render(<App />);
+    expect(screen.getByText('Loading…')).toBeInTheDocument();
+
+    await finishInitialLoad();
+
+    for (const task of seededTasks) {
+      expect(screen.getByText(task.title)).toBeInTheDocument();
+    }
+  });
+
+  it('re-renders a task as completed after its checkbox is toggled', async () => {
+    vi.useFakeTimers();
+    fetchTasks.mockResolvedValue(seededTasks);
+    toggleTask.mockResolvedValue({ ...seededTasks[1], completed: true });
+
+    render(<App />);
+    await finishInitialLoad();
+
+    const checkbox = screen.getByRole('checkbox', { name: seededTasks[1].title });
+    fireEvent.click(checkbox);
+    await act(async () => {});
+
+    expect(checkbox).toBeChecked();
+    expect(screen.getByText(seededTasks[1].title)).toHaveStyle({ textDecoration: 'line-through' });
+  });
+
+  it('removes only the deleted task and leaves the remaining rows intact', async () => {
+    vi.useFakeTimers();
+    fetchTasks.mockResolvedValue(seededTasks);
+    deleteTask.mockResolvedValue({ id: seededTasks[1].id });
+
+    render(<App />);
+    await finishInitialLoad();
+
+    const row = screen.getByText(seededTasks[1].title).closest('li');
+    fireEvent.click(screen.getAllByRole('button', { name: 'Delete' })[1]);
+    await act(async () => {});
+
+    expect(row).not.toBeInTheDocument();
+    expect(screen.queryByText(seededTasks[1].title)).not.toBeInTheDocument();
+    expect(screen.getByText(seededTasks[0].title)).toBeInTheDocument();
+    expect(screen.getByText(seededTasks[2].title)).toBeInTheDocument();
+  });
+
+  it('keeps the newest filter and search result when earlier requests resolve late', async () => {
+    vi.useFakeTimers();
+    const initial = deferred();
+    const completed = deferred();
+    const search = deferred();
+    fetchTasks
+      .mockReturnValueOnce(initial.promise)
+      .mockReturnValueOnce(completed.promise)
+      .mockReturnValueOnce(search.promise);
+
+    render(<App />);
+    await finishInitialLoad();
+
+    fireEvent.click(screen.getByRole('button', { name: 'completed' }));
+    await finishInitialLoad();
+
+    await act(async () => {
+      fireEvent.change(screen.getByRole('searchbox'), { target: { value: 'latest' } });
+      await vi.advanceTimersByTimeAsync(700);
+    });
+
+    await act(async () => {
+      search.resolve([{ id: 4, title: 'Latest result', completed: false }]);
+    });
+    expect(screen.getByText('Latest result')).toBeInTheDocument();
+
+    await act(async () => {
+      completed.resolve([{ id: 5, title: 'Stale completed result', completed: true }]);
+      initial.resolve([{ id: 6, title: 'Stale initial result', completed: false }]);
+    });
+
+    expect(screen.getByText('Latest result')).toBeInTheDocument();
+    expect(screen.queryByText('Stale completed result')).not.toBeInTheDocument();
+    expect(screen.queryByText('Stale initial result')).not.toBeInTheDocument();
+  });
+});
+
+describe('URL-synced filter', () => {
+  it('restores the filter from the URL on first render', async () => {
+    vi.useFakeTimers();
+    window.history.replaceState({}, '', '/?filter=active');
+    fetchTasks.mockResolvedValue([]);
+
+    render(<App />);
+    await finishInitialLoad();
+
+    // The very first request must already use the URL's filter — not fetch
+    // "all" and then correct itself, which would flash the wrong list.
+    expect(fetchTasks).toHaveBeenCalledTimes(1);
+    expect(fetchTasks.mock.calls[0][0]).toMatchObject({ filter: 'active' });
+    expect(screen.getByRole('button', { name: 'active' })).toBeDisabled();
+  });
+
+  it('falls back to "all" when the URL carries an unknown filter', async () => {
+    vi.useFakeTimers();
+    window.history.replaceState({}, '', '/?filter=nonsense');
+    fetchTasks.mockResolvedValue([]);
+
+    render(<App />);
+    await finishInitialLoad();
+
+    expect(fetchTasks.mock.calls[0][0]).toMatchObject({ filter: 'all' });
+    expect(screen.getByRole('button', { name: 'all' })).toBeDisabled();
+  });
+
+  it('writes the filter to the URL when one is picked', async () => {
+    vi.useFakeTimers();
+    fetchTasks.mockResolvedValue([]);
+
+    render(<App />);
+    await finishInitialLoad();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'completed' }));
+    });
+
+    expect(window.location.search).toBe('?filter=completed');
+  });
+
+  it('drops the param again when returning to "all"', async () => {
+    vi.useFakeTimers();
+    window.history.replaceState({}, '', '/?filter=completed');
+    fetchTasks.mockResolvedValue([]);
+
+    render(<App />);
+    await finishInitialLoad();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'all' }));
+    });
+
+    // "all" is the default, so a bare URL is the honest representation.
+    expect(window.location.search).toBe('');
+  });
+
+  it('preserves unrelated query params', async () => {
+    vi.useFakeTimers();
+    window.history.replaceState({}, '', '/?ref=email');
+    fetchTasks.mockResolvedValue([]);
+
+    render(<App />);
+    await finishInitialLoad();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'active' }));
+    });
+
+    expect(window.location.search).toContain('ref=email');
+    expect(window.location.search).toContain('filter=active');
+  });
+
+  it('follows the browser Back button', async () => {
+    vi.useFakeTimers();
+    fetchTasks.mockResolvedValue([]);
+
+    render(<App />);
+    await finishInitialLoad();
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'completed' }));
+    });
+    expect(screen.getByRole('button', { name: 'completed' })).toBeDisabled();
+
+    fetchTasks.mockClear();
+
+    // Back: the URL changes and popstate fires, but React is not re-rendered
+    // by the browser — the listener is what keeps state in step.
+    await act(async () => {
+      window.history.replaceState({}, '', '/');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+      await vi.advanceTimersByTimeAsync(400);
+    });
+
+    expect(screen.getByRole('button', { name: 'all' })).toBeDisabled();
+    expect(fetchTasks.mock.calls[0][0]).toMatchObject({ filter: 'all' });
+  });
 });
